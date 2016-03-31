@@ -1,8 +1,8 @@
 import EntitySchema from './EntitySchema';
 import IterableSchema from './IterableSchema';
-import isObject from 'lodash/lang/isObject';
-import isEqual from 'lodash/lang/isEqual';
-import mapValues from 'lodash/object/mapValues';
+import UnionSchema from './UnionSchema';
+import isEqual from 'lodash/isEqual';
+import isObject from 'lodash/isObject';
 
 function defaultAssignEntity(normalized, key, entity) {
   normalized[key] = entity;
@@ -15,7 +15,7 @@ function visitObject(obj, schema, bag, options) {
   for (let key in obj) {
     if (obj.hasOwnProperty(key)) {
       const entity = visit(obj[key], schema[key], bag, options);
-      assignEntity.call(null, normalized, key, entity);
+      assignEntity.call(null, normalized, key, entity, obj);
     }
   }
   return normalized;
@@ -34,18 +34,23 @@ function polymorphicMapper(iterableSchema, itemSchema, bag, options) {
 }
 
 function visitIterable(obj, iterableSchema, bag, options) {
-  const isPolymorphicSchema = iterableSchema.isPolymorphicSchema();
   const itemSchema = iterableSchema.getItemSchema();
-  const itemMapper = isPolymorphicSchema ? polymorphicMapper : defaultMapper;
-  const curriedItemMapper = itemMapper(iterableSchema, itemSchema, bag, options);
+  const curriedItemMapper = defaultMapper(iterableSchema, itemSchema, bag, options);
 
   if (Array.isArray(obj)) {
     return obj.map(curriedItemMapper);
   } else {
-    return mapValues(obj, curriedItemMapper);
+    return Object.keys(obj).reduce(function (objMap, key) {
+      objMap[key] = curriedItemMapper(obj[key]);
+      return objMap;
+    }, {});
   }
 }
 
+function visitUnion(obj, unionSchema, bag, options) {
+  const itemSchema = unionSchema.getItemSchema();
+  return polymorphicMapper(unionSchema, itemSchema, bag, options)(obj);
+}
 
 function defaultMergeIntoEntity(entityA, entityB, entityKey) {
   for (let key in entityB) {
@@ -95,6 +100,8 @@ function visit(obj, schema, bag, options) {
     return visitEntity(obj, schema, bag, options);
   } else if (schema instanceof IterableSchema) {
     return visitIterable(obj, schema, bag, options);
+  } else if (schema instanceof UnionSchema) {
+    return visitUnion(obj, schema, bag, options);
   } else {
     return visitObject(obj, schema, bag, options);
   }
@@ -106,6 +113,10 @@ export function arrayOf(schema, options) {
 
 export function valuesOf(schema, options) {
   return new IterableSchema(schema, options);
+}
+
+export function unionOf(schema, options) {
+  return new UnionSchema(schema, options);
 }
 
 export { EntitySchema as Schema };

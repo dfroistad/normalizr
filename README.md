@@ -95,7 +95,6 @@ First, define a schema for our entities:
 ```javascript
 const article = new Schema('articles');
 const user = new Schema('users');
-const collection = new Schema('collections');
 ```
 
 Then we define nesting rules:
@@ -103,11 +102,7 @@ Then we define nesting rules:
 ```javascript
 article.define({
   author: user,
-  collections: arrayOf(collection)
-});
-
-collection.define({
-  curator: user
+  contributors: arrayOf(user)
 });
 ```
 
@@ -119,12 +114,63 @@ const ServerActionCreators = {
   // These are two different XHR endpoints with different response schemas.
   // We can use the schema objects defined earlier to express both of them:
 
-  receiveArticles(response) {
-  
-    // Passing { articles: arrayOf(article) } as second parameter to normalize()
-    // lets it correctly traverse the response tree and gather all entities:
-    
-    // BEFORE
+  receiveOneArticle(response) {
+
+    // Here, the response is an object containing data about one article.
+    // Passing the article schema as second parameter to normalize() lets it
+    // correctly traverse the response tree and gather all entities:
+
+    // BEFORE:
+    // {
+    //   id: 1,
+    //   title: 'Some Article',
+    //   author: {
+    //     id: 7,
+    //     name: 'Dan'
+    //   },
+    //   contributors: [{
+    //     id: 10,
+    //     name: 'Abe'
+    //   }, {
+    //     id: 15,
+    //     name: 'Fred'
+    //   }]
+    // }
+    //
+    // AFTER:
+    // {
+    //   result: 1,                    // <--- Note object is referenced by ID
+    //   entities: {
+    //     articles: {
+    //       1: {
+    //         author: 7,              // <--- Same happens for references to
+    //         contributors: [10, 15]  // <--- other entities in the schema
+    //         ...}
+    //     },
+    //     users: {
+    //       7: { ... },
+    //       10: { ... },
+    //       15: { ... }
+    //     }
+    //   }
+    // }
+
+    response = normalize(response, article);
+
+    AppDispatcher.handleServerAction({
+      type: ActionTypes.RECEIVE_ONE_ARTICLE,
+      response
+    });
+  },
+
+  receiveAllArticles(response) {
+
+    // Here, the response is an object with the key 'articles' referencing
+    // an array of article objects. Passing { articles: arrayOf(article) } as
+    // second parameter to normalize() lets it correctly traverse the response
+    // tree and gather all entities:
+
+    // BEFORE:
     // {
     //   articles: [{
     //     id: 1,
@@ -132,14 +178,17 @@ const ServerActionCreators = {
     //     author: {
     //       id: 7,
     //       name: 'Dan'
-    //     }
-    //   }, ...]
+    //     },
+    //     ...
+    //   },
+    //   ...
+    //   ]
     // }
     //
     // AFTER:
     // {
     //   result: {
-    //    articles: [1, 2, ...] // <--- Note how object array turned into ID array
+    //    articles: [1, 2, ...]     // <--- Note how object array turned into ID array
     //   },
     //   entities: {
     //     articles: {
@@ -152,53 +201,14 @@ const ServerActionCreators = {
     //       ..
     //     }
     //   }
-    
+    // }
+
     response = normalize(response, {
       articles: arrayOf(article)
     });
 
     AppDispatcher.handleServerAction({
-      type: ActionTypes.RECEIVE_ARTICLES,
-      response
-    });
-  },
-  
-  // Though this is a different API endpoint, we can describe it just as well
-  // with our normalizr schema objects:
-
-  receiveUsers(response) {
-
-    // Passing { users: arrayOf(user) } as second parameter to normalize()
-    // lets it correctly traverse the response tree and gather all entities:
-    
-    // BEFORE
-    // {
-    //   users: [{
-    //     id: 7,
-    //     name: 'Dan',
-    //     ...
-    //   }, ...]
-    // }
-    //
-    // AFTER:
-    // {
-    //   result: {
-    //    users: [7, ...] // <--- Note how object array turned into ID array
-    //   },
-    //   entities: {
-    //     users: {
-    //       7: { ... },
-    //       ..
-    //     }
-    //   }
-    
-
-    response = normalize(response, {
-      users: arrayOf(user)
-    });
-
-    AppDispatcher.handleServerAction({
-      type: ActionTypes.RECEIVE_USERS,
+      type: ActionTypes.RECEIVE_ALL_ARTICLES,
       response
     });
   }
@@ -250,6 +260,31 @@ const user = new Schema('users');
 article.define({
   author: user
 });
+```
+
+### `Schema.prototype.getKey()`
+
+Returns the key of the schema.
+
+```javascript
+const article = new Schema('articles');
+
+article.getKey();
+// articles
+```
+
+### `Schema.prototype.getIdAttribute()`
+
+Returns the idAttribute of the schema.
+
+```javascript
+const article = new Schema('articles');
+const slugArticle = new Schema('articles', { idAttribute: 'slug' });
+
+article.getIdAttribute();
+// id
+slugArticle.getIdAttribute();
+// slug
 ```
 
 ### `arrayOf(schema, [options])`
@@ -306,8 +341,8 @@ If the map contains entities with different schemas, you can use the `schemaAttr
 
 ```javascript
 const article = new Schema('articles');
-const user = new Schema('images');
-const group = new Schema('videos');
+const user = new Schema('users');
+const group = new Schema('groups');
 const collaborator = {
   users: user,
   groups: group
@@ -325,6 +360,52 @@ article.define({
 });
 ```
 
+### `unionOf(schemaMap, [options])`
+
+Describe a schema which is a union of multiple schemas.  This is useful if you need the polymorphic behavior provided by `arrayOf` or `valuesOf` but for non-collection fields.
+
+Use the required `schemaAttribute` option to specify which schema to use for each entity.
+
+```javascript
+const group = new Schema('groups');
+const user = new Schema('users');
+
+// a member can be either a user or a group
+const member = {
+  users: user,
+  groups: group
+};
+
+// You can specify the name of the attribute that determines the schema
+group.define({
+  owner: unionOf(member, { schemaAttribute: 'type' })
+});
+
+// Or you can specify a function to infer it
+function inferSchema(entity) { /* ... */ }
+group.define({
+  creator: unionOf(member, { schemaAttribute: inferSchema })
+});
+```
+
+A `unionOf` schema can also be combined with `arrayOf` and `valueOf` with the same behavior as each supplied with the `schemaAttribute` option.
+
+```javascript
+const group = new Schema('groups');
+const user = new Schema('users');
+
+const member = unionOf({
+  users: user,
+  groups: group
+}, { schemaAttribute: 'type' });
+
+group.define({
+  owner: member,
+  members: arrayOf(member),
+  relationships: valuesOf(member)
+});
+```
+
 ### `normalize(obj, schema, [options])`
 
 Normalizes object according to schema.  
@@ -332,7 +413,7 @@ Passed `schema` should be a nested object reflecting the structure of API respon
 
 You may optionally specify any of the following options:
 
-* `assignEntity` (function): This is useful if your backend emits additional fields, such as separate ID fields, you'd like to delete in the normalized entity. See [the test](https://github.com/gaearon/normalizr/blob/47ed0ecd973da6fa7c8b2de461e35b293ae52047/test/index.js#L84-L130) and the [discussion](https://github.com/gaearon/normalizr/issues/10) for a usage example.
+* `assignEntity` (function): This is useful if your backend emits additional fields, such as separate ID fields, you'd like to delete in the normalized entity. See [the tests](https://github.com/gaearon/normalizr/blob/a0931d7c953b24f8f680b537b5f23a20e8483be1/test/index.js#L89-L200) and the [discussion](https://github.com/gaearon/normalizr/issues/10) for a usage example.
 
 * `mergeIntoEntity` (function): You can use this to resolve conflicts when merging entities with the same key. See [the test](https://github.com/gaearon/normalizr/blob/47ed0ecd973da6fa7c8b2de461e35b293ae52047/test/index.js#L132-L197) and the [discussion](https://github.com/gaearon/normalizr/issues/34) for a usage example.
 
@@ -352,8 +433,19 @@ article.define({
 
 // ...
 
-const json = getArticleArray();
-const normalized = normalize(json, arrayOf(article));
+// Normalize one article object
+const json = { id: 1, author: ... };
+const normalized = normalize(json, article);
+
+// Normalize an array of article objects
+const arr = [{ id: 1, author: ... }, ...]
+const normalized = normalize(arr, arrayOf(article));
+
+// Normalize an array of article objects, referenced by an object key:
+const wrappedArr = { articles: [{ id: 1, author: ... }, ...] }
+const normalized = normalize(wrappedArr, {
+  articles: arrayOf(article)
+});
 ```
 
 ## Explanation by Example
@@ -442,7 +534,7 @@ Normalizr solves the problem by converting API responses to a flat form where ne
 Then `UserStore` code can be rewritten as:
 
 ```javascript
-// With normalizr, users are always in action.entities.users
+// With normalizr, users are always in action.response.entities.users
 
 AppDispatcher.register((payload) => {
   const { action } = payload;
@@ -457,7 +549,12 @@ AppDispatcher.register((payload) => {
 
 ## Dependencies
 
-* `lodash` for `isObject`, `isEqual` and `mapValues`
+* Some methods from `lodash`, such as `isObject`, `isEqual` and `mapValues`
+
+## Browser Support
+
+Modern browsers with ES5 environments are supported.  
+The minimal supported IE version is IE 9.
 
 ## Running Tests
 

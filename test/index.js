@@ -1,14 +1,16 @@
 'use strict';
 
 var should = require('chai').should(),
-    isEqual = require('lodash/lang/isEqual'),
-    isObject = require('lodash/lang/isObject'),
-    merge = require('lodash/object/merge'),
+    isEqual = require('lodash/isEqual'),
+    isObject = require('lodash/isObject'),
+    map = require('lodash/map'),
+    merge = require('lodash/merge'),
     normalizr = require('../src'),
     normalize = normalizr.normalize,
     Schema = normalizr.Schema,
     arrayOf = normalizr.arrayOf,
-    valuesOf = normalizr.valuesOf;
+    valuesOf = normalizr.valuesOf,
+    unionOf = normalizr.unionOf;
 
 describe('normalizr', function () {
   it('fails creating nameless schema', function () {
@@ -66,6 +68,9 @@ describe('normalizr', function () {
     };
 
     Object.freeze(input);
+
+    article.getIdAttribute().should.eql('id');
+    article.getKey().should.eql('articles');
 
     normalize(input, article).should.eql({
       result: 1,
@@ -126,6 +131,71 @@ describe('normalizr', function () {
           }
         }
       }
+    });
+  });
+
+  it('can update key values based on original input using a custom function', function () {
+    var article = new Schema('articles'),
+        author = new Schema('authors'),
+        input;
+
+    article.define({
+      author: author
+    });
+
+    input = {
+      id: '123',
+      title: 'My article',
+      author: {
+        id: '321',
+        screenName: 'paul'
+      },
+      media: [
+        {
+          id: '1345',
+          url: 'https://bit.ly/...'
+        }
+      ]
+    };
+
+    var options = {
+      assignEntity: function (obj, key, val, originalInput) {
+        if (key === 'media') {
+          var screenName = originalInput.author.screenName;
+          val = map(val, function (media, i) {
+            return merge({}, media, {
+              mediaViewUrl: '/' + screenName + '/articles/' + obj.id + '/photos/' + i
+            });
+          });
+        }
+        obj[key] = val;
+      }
+    };
+
+    normalize(input, article, options).should.eql({
+      entities: {
+        articles: {
+          '123': {
+            id: '123',
+            title: 'My article',
+            author: '321',
+            media: [
+              {
+                id: '1345',
+                url: 'https://bit.ly/...',
+                mediaViewUrl: '/paul/articles/123/photos/0'
+              }
+            ]
+          }
+        },
+        authors: {
+          '321': {
+            id: '321',
+            screenName: 'paul'
+          }
+        }
+      },
+      result: '123'
     });
   });
 
@@ -208,6 +278,9 @@ describe('normalizr', function () {
     };
 
     Object.freeze(input);
+
+    article.getIdAttribute().should.eql('slug');
+    article.getKey().should.eql('articles');
 
     normalize(input, article).should.eql({
       result: 'some-article',
@@ -1370,4 +1443,115 @@ describe('normalizr', function () {
     });
 
   });
+
+  it('can normalize a polymorphic union field and array and map', function () {
+    var user = new Schema('users'),
+        group = new Schema('groups'),
+        member = unionOf({
+          users: user,
+          groups: group
+        }, { schemaAttribute: 'type' }),
+        input;
+
+    group.define({
+      members: arrayOf(member),
+      owner: member,
+      relations: valuesOf(member)
+    });
+
+    input = {
+      group: {
+        id: 1,
+        name: 'facebook',
+        members: [{
+          id: 2,
+          type: 'groups',
+          name: 'react'
+        }, {
+          id: 3,
+          type: 'users',
+          name: 'Huey'
+        }],
+        owner: {
+          id: 4,
+          type: 'users',
+          name: 'Jason'
+        },
+        relations: {
+          friend: {
+            id: 5,
+            type: 'users',
+            name: 'Nate'
+          }
+        }
+      }
+    };
+
+    Object.freeze(input);
+
+    normalize(input, { group: group }).should.eql({
+      result: {
+        group: 1
+      },
+      entities: {
+        groups: {
+          1: {
+            id: 1,
+            name: 'facebook',
+            members: [{
+              id: 2,
+              schema: 'groups'
+            }, {
+              id: 3,
+              schema: 'users'
+            }],
+            owner: {
+              id: 4,
+              schema: 'users'
+            },
+            relations: {
+              friend: {
+                id: 5,
+                schema: 'users'
+              }
+            }
+          },
+          2: {
+            id: 2,
+            type: 'groups',
+            name: 'react'
+          }
+        },
+        users: {
+          3: {
+            id: 3,
+            type: 'users',
+            name: 'Huey'
+          },
+          4: {
+            id: 4,
+            type: 'users',
+            name: 'Jason'
+          },
+          5: {
+            id: 5,
+            type: 'users',
+            name: 'Nate'
+          }
+        }
+      }
+    });
+  });
+
+  it('fails creating union schema without schemaAttribute', function () {
+    (function () {
+      var user = new Schema('users'),
+          group = new Schema('groups'),
+          member = unionOf({
+            users: user,
+            groups: group
+          });
+    }).should.throw();
+  });
+
 });
